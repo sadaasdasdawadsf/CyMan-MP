@@ -1,95 +1,72 @@
-# BeamMP-Server
+# CyMan-MP Server
 
-[![CMake Windows Build](https://github.com/BeamMP/BeamMP-Server/workflows/CMake%20Windows%20Build/badge.svg?branch=master)](https://github.com/BeamMP/BeamMP-Server/actions?query=workflow%3A%22CMake+Windows+Build%22)
-[![CMake Linux Build](https://github.com/BeamMP/BeamMP-Server/workflows/CMake%20Linux%20Build/badge.svg?branch=master)](https://github.com/BeamMP/BeamMP-Server/actions?query=workflow%3A%22CMake+Linux+Build%22)
+CyMan-MP is a **modified version of the [BeamMP-Server](https://github.com/BeamMP/BeamMP-Server)**, the server for the BeamNG.drive multiplayer mod BeamMP. It is built from the BeamMP server source code and runs with its own backend, launcher and website.
 
-This is the server for the multiplayer mod **[BeamMP](https://beammp.com/)** for the game [BeamNG.drive](https://www.beamng.com/).
-The server is the point through which all clients communicate. You can write Lua mods for the server, there are detailed instructions on the [BeamMP Wiki](https://wiki.beammp.com).
+> **CyMan-MP is not affiliated with, endorsed by, or supported by BeamMP Ltd. or the BeamMP team.**
+> Please do not ask the BeamMP team for support with CyMan-MP.
 
-**For Linux, you __need__ the runtime dependencies, which are listed below under [Runtime Dependencies](#runtime-dependencies)**
+- Website: https://cymanmp.okeyhi.com
+- Discord: https://discord.gg/FgyuMNSe2x
 
-## Support + Contact
+## What's different from BeamMP-Server
 
-Feel free to ask any questions via the following channels:
+- Connects to the CyMan-MP backend instead of the official BeamMP backend.
+- Optional **MeshSync** (`MeshSync` and `MeshSyncIntensity` in `ServerConfig.toml`). It syncs vehicle damage and deformation between players. It is heavy on CPU, bandwidth and server load, so it is off by default.
+- More reliable backend requests on hosts with strict thread or PID limits. Curl is built with c-ares, and the server resolves the backend hostname itself and caches the last good answer.
+- Fixes for idle CPU usage: the Lua result-check thread no longer busy-loops, and the network accept and receive loops back off after repeated errors.
 
-- **Discord**: [click for invite](https://discord.gg/beammp)
-- **BeamMP Forum**: [BeamMP Forum Support](https://forum.beammp.com/c/support/33)
+Everything else works like the original BeamMP server, including Lua server plugins. The upstream wiki is a good reference for the plugin API: https://wiki.beammp.com
 
-## Minimum Requirements
+## Getting a server key
 
-These values are guesstimated and are subject to change with each release.
+1. Create an account on https://cymanmp.okeyhi.com.
+2. Open the Keymaster page and create a key.
+3. Put the key in `ServerConfig.toml` as `AuthKey`.
 
-* RAM: 30-100 MiB usable (not counting OS overhead)
-* CPU: >1GHz, preferably multicore
-* OS: Windows, Linux (theoretically any POSIX)
-* GPU: None
-* HDD: 10 MiB + Mods/Plugins
-* Bandwidth: 5-10 Mb/s upload
+## Minimum requirements
 
-## Contributing
+These are rough estimates and may change between releases.
 
-TLDR; [Issues](https://github.com/BeamMP/BeamMP-Server/issues) with the "help wanted" or "good first issue" label or with nobody assigned.
+- RAM: 30-100 MiB (not counting OS overhead)
+- CPU: >1 GHz, preferably multicore
+- OS: Linux or Windows
+- Bandwidth: 5-10 Mb/s upload
+- Disk: 10 MiB plus mods and plugins
 
-To contribute, look at the active [issues](https://github.com/BeamMP/BeamMP-Server/issues). Any issues that have the "help wanted" label or don't have anyone assigned are good tasks to take on. You can either contribute by programming or by testing and adding more info and ideas.
+## Downloads
 
-Fork this repository, make a new branch for your feature, implement your feature or fix, and then create a pull-request here. Even incomplete features and fixes can be pull-requested.
+Prebuilt Linux binaries (Debian 12, x86_64) are published on the [Releases page](../../releases) as the `latest` release.
 
-If you need support with understanding the codebase, please write us in the Discord. You'll need to be proficient in modern C++.
+Runtime dependencies on Debian, Ubuntu and similar: `liblua5.3-0`.
 
-## About Building from Source
+## Building from source
 
-We only allow building unmodified (original) source code for public use. `master` is considered **unstable** and we will not provide technical support if such a build doesn't work, so always build from a tag. You can checkout a tag with `git checkout tags/TAGNAME`, where `TAGNAME` is the tag, for example `v3.4.1`. See [the tags](https://github.com/BeamMP/BeamMP-Server/tags) for possible versions/tags, as well as [the releases](https://github.com/BeamMP/BeamMP-Server/releases) to check which version is marked as a release/prerelease. We recommend using the [latest release](https://github.com/BeamMP/BeamMP-Server/releases/latest).
-
-## Supported Operating Systems
-
-The code itself supports (latest stable) Linux, Windows and FreeBSD. In terms of actual build support, for now we usually only distribute Windows binaries and Linux. For any other distro or OS, you just have to find the same libraries listed in [Runtime Dependencies](#runtime-dependencies) further down the page, and it should build fine.
-
-Recommended compilers: MSVC, GCC, CLANG. 
-
-You can find precompiled binaries under [Releases](https://github.com/BeamMP/BeamMP-Server/releases/).
-
-## Build Instructions
-
-On Linux, you need some dependencies to **build** the server (on Windows, you don't):
+On Linux you need these build dependencies:
 
 ```
 liblua5.3-dev curl zip unzip tar cmake make git g++
 ```
 
-You can install these with your distribution's package manager. You will need sudo or need root for ONLY this step.
+If you are building for ARM (for example aarch64), run `export VCPKG_FORCE_SYSTEM_BINARIES=1` first.
 
-The names of each package may change depending on your platform.
-
-If you are building for ARM (like aarch64), you need to run `export VCPKG_FORCE_SYSTEM_BINARIES=1` before the following commands.
-
-You can build on **Windows, Linux** or other platforms by following these steps:
-
-1. Check out the repository with git: `git clone --recursive https://github.com/BeamMP/BeamMP-Server`.
-2. Go into the directory `cd BeamMP-Server`.
-3. Specify the server version to build by checking out a tag: `git checkout tags/v3.4.1` - [Possible versions/tags](https://github.com/BeamMP/BeamMP-Server/tags)
-4. Run CMake `cmake -S . -B bin -DCMAKE_BUILD_TYPE=Release` - this can take a few minutes and may take a lot of disk space and bandwidth.
-5. Build via `cmake --build bin --parallel --config Release -t BeamMP-Server`.
-6. Your executable can be found in `bin/`.
-
-When you make changes to the code, you only have to run step 4 again.
-### Building for FreeBSD
-Building is only supported for major release branches of FreeBSD that are currently not EOL. The build process is the same as on Linux, although build dependencies can be universally installed from ports via pkg:
 ```
-pkg install git cmake-core zip bash devel/ninja devel/pkgconf lua53
+git clone --recursive https://github.com/sadaasdasdawadsf/CyMan-MP
+cd CyMan-MP
+cmake -S . -B bin -DCMAKE_BUILD_TYPE=Release
+cmake --build bin --parallel --config Release -t BeamMP-Server
 ```
-After installing the necessary build dependencies, follow the Linux build instructions beginning from step 3. Beware that running the initial cmake command will compile vcpkg from source, as vcpkg has no native FreeBSD port - this may take some time.
 
-On systems with a single logical CPU core, `make` may fail to build the server when using the `--parallel` option when calling CMake. If you see error messages related to make, simply omit the `--parallel` from the command: `cmake --build bin --config Release -t BeamMP-Server`.
+The executable ends up in `bin/`. The first configure step can take a while and uses a lot of disk space because vcpkg builds all dependencies.
 
-### Runtime Dependencies
+## License and source code
 
-These are needed to *run* the server.
+CyMan-MP is based on BeamMP-Server and is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0), the same license as the original. See [LICENSE](LICENSE).
 
-Debian, Ubuntu and friends: `liblua5.3-0`
+- Original work: Copyright (C) BeamMP Ltd., BeamMP team and contributors.
+- Modifications: CyMan-MP.
 
-Other Linux distros: `liblua` of *some kind*.
-
-Windows: No libraries.
+Under the AGPL, the complete source code of this modified version is available in this repository, and anyone who plays on a CyMan-MP server may obtain it from here.
 
 ## Support
-The BeamMP project is supported by community donations via our [Patreon](https://www.patreon.com/BeamMP). This brings perks such as Patreon-only channels on our Discord, early access to new updates, and more server keys. 
+
+Ask questions in the [CyMan-MP Discord](https://discord.gg/FgyuMNSe2x).
