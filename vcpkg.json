@@ -1,0 +1,36 @@
+{
+  "name": "server",
+  "version-string": "0.1.0",
+  "builtin-baseline": "5bf0c55239da398b8c6f450818c9e28d36bf9966",
+  "dependencies": [
+    "boost-asio",
+    "boost-spirit",
+    "boost-uuid",
+    "boost-variant",
+    "cpp-httplib",
+    {
+      "name": "curl",
+      "features": [
+        "c-ares"
+      ]
+    },
+    "doctest",
+    "fmt",
+    "libzip",
+    "lua",
+    "nlohmann-json",
+    "openssl",
+    "rapidjson",
+    "sol2"
+  ],
+  "overrides": [
+    {
+      "name": "sol2",
+      "version": "3.3.1"
+    },
+    {
+      "name": "lua",
+      "version": "5.3.5#6"
+    }
+  ]
+}
