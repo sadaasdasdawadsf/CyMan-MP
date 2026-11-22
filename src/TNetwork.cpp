@@ -466,7 +466,9 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
             };
 
             unsigned int ResponseCode = 0;
-            AuthResStr = Http::POST(Net.Url + "/pkToUser", AuthReq.dump(), "application/json", &ResponseCode);
+            // Short timeout: the launcher gives up after a while, and a dead network must not eat the whole
+            // budget before the next network gets its turn.
+            AuthResStr = Http::POST(Net.AuthUrl + "/pkToUser", AuthReq.dump(), "application/json", &ResponseCode, { }, 8);
         } catch (const std::exception& e) {
             beammp_debugf("Invalid json sent by client, kicking: {}", e.what());
             ClientKick(*Client, "Invalid Key (invalid UTF8 string)!");

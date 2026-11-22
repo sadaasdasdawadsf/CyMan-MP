@@ -40,7 +40,7 @@ namespace fs = std::filesystem;
 
 namespace Http {
 std::string GET(const std::string& url, unsigned int* status = nullptr);
-std::string POST(const std::string& url, const std::string& body, const std::string& ContentType, unsigned int* status = nullptr, const std::map<std::string, std::string>& headers = {});
+std::string POST(const std::string& url, const std::string& body, const std::string& ContentType, unsigned int* status = nullptr, const std::map<std::string, std::string>& headers = {}, long TimeoutSeconds = 30);
 namespace Status {
     std::string ToString(int code);
 }

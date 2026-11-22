@@ -20,6 +20,7 @@
 
 #include "Common.h"
 #include "CustomAssert.h"
+#include "BoundedResolve.h"
 
 #include <cstdlib>
 #include <curl/easy.h>
@@ -129,23 +130,52 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------
-// Thread-free DNS.
+// DNS with a time limit.
 // curl's default resolver runs getaddrinfo() on a NEW thread. On hosts that cap threads/PIDs per
-// container that fails with "getaddrinfo() thread failed to start" and every backend request dies.
-// A plain getaddrinfo() on the calling thread needs no new thread, so we resolve the host ourselves
-// and give curl the answer via CURLOPT_RESOLVE. The last good answer is cached and reused if a later
-// lookup fails. (Not needed on Windows.)
+// container that can fail with "getaddrinfo() thread failed to start" and every backend request dies.
+// So we resolve the host ourselves and give curl the answer via CURLOPT_RESOLVE. A bare getaddrinfo()
+// has no timeout and on broken container DNS it can block forever (which froze the heartbeat and every
+// player join), so it runs on a helper thread that we only wait for a few seconds. If it is too slow
+// curl resolves the name itself (bounded by its connect timeout). The last good answer is cached and
+// reused if a later lookup fails. (Not needed on Windows.)
 // ---------------------------------------------------------------------------------------------
 #ifndef _WIN32
 struct ResolveCacheEntry {
     std::string Addrs;
     std::chrono::steady_clock::time_point Time;
 };
-static std::mutex gResolveMutex;
-static std::map<std::string, ResolveCacheEntry> gResolveCache;
+// Deliberately leaked: a lookup that finishes late runs on a detached thread and must never touch a destroyed global.
+static std::mutex& gResolveMutex = *new std::mutex;
+static std::map<std::string, ResolveCacheEntry>& gResolveCache = *new std::map<std::string, ResolveCacheEntry>;
+static std::map<std::string, std::chrono::steady_clock::time_point>& gResolveFailUntil = *new std::map<std::string, std::chrono::steady_clock::time_point>;
 constexpr auto RESOLVE_CACHE_TTL = std::chrono::minutes(5);
+constexpr auto RESOLVE_LOOKUP_LIMIT = std::chrono::seconds(5); // how long we wait for DNS before letting curl try
+constexpr auto RESOLVE_FAIL_BACKOFF = std::chrono::seconds(30); // after a failed/hung lookup, don't stall every request again
+
+static std::string AddrsForHost(const std::string& Host, const std::string& Port) {
+    std::string Addrs;
+    addrinfo Hints {};
+    Hints.ai_family = AF_INET; // matches CURL_IPRESOLVE_V4 below
+    Hints.ai_socktype = SOCK_STREAM;
+    addrinfo* Res = nullptr;
+    if (getaddrinfo(Host.c_str(), Port.c_str(), &Hints, &Res) == 0) {
+        for (addrinfo* P = Res; P; P = P->ai_next) {
+            char Buf[INET_ADDRSTRLEN];
+            auto* A = reinterpret_cast<sockaddr_in*>(P->ai_addr);
+            if (inet_ntop(AF_INET, &A->sin_addr, Buf, sizeof(Buf))) {
+                if (!Addrs.empty()) {
+                    Addrs += ",";
+                }
+                Addrs += Buf;
+            }
+        }
+        freeaddrinfo(Res);
+    }
+    return Addrs;
+}
 
 /// Returns a "host:port:ip[,ip]" entry for CURLOPT_RESOLVE, or "" if curl should just resolve it itself.
+/// Never blocks for longer than RESOLVE_LOOKUP_LIMIT.
 static std::string BuildResolveEntry(const std::string& Url) {
     auto SchemeEnd = Url.find("://");
     if (SchemeEnd == std::string::npos) {
@@ -186,33 +216,50 @@ static std::string BuildResolveEntry(const std::string& Url) {
         if (It != gResolveCache.end() && Now - It->second.Time < RESOLVE_CACHE_TTL) {
             return Key + ":" + It->second.Addrs;
         }
+        // a lookup for this host just failed or hung: don't make every request wait for it again
+        auto Fail = gResolveFailUntil.find(Key);
+        if (Fail != gResolveFailUntil.end() && Now < Fail->second) {
+            if (It != gResolveCache.end()) {
+                return Key + ":" + It->second.Addrs; // stale, but better than nothing
+            }
+            return {};
+        }
     }
 
-    // blocking lookup on this thread (no helper thread is created)
+    // Lookup on a helper thread, with a time limit. If it is too slow we hand the hostname to curl, whose own
+    // resolver honours CURLOPT_CONNECTTIMEOUT, so a join or heartbeat can never hang on DNS.
     std::string Addrs;
-    addrinfo Hints {};
-    Hints.ai_family = AF_INET; // matches CURL_IPRESOLVE_V4 below
-    Hints.ai_socktype = SOCK_STREAM;
-    addrinfo* Res = nullptr;
-    if (getaddrinfo(Host.c_str(), Port.c_str(), &Hints, &Res) == 0) {
-        for (addrinfo* P = Res; P; P = P->ai_next) {
-            char Buf[INET_ADDRSTRLEN];
-            auto* A = reinterpret_cast<sockaddr_in*>(P->ai_addr);
-            if (inet_ntop(AF_INET, &A->sin_addr, Buf, sizeof(Buf))) {
-                if (!Addrs.empty()) {
-                    Addrs += ",";
-                }
-                Addrs += Buf;
+    const auto Outcome = BoundedResolve::Run(
+        [Host, Port] { return AddrsForHost(Host, Port); },
+        std::chrono::duration_cast<std::chrono::milliseconds>(RESOLVE_LOOKUP_LIMIT), Addrs,
+        [Key](const std::string& LateAddrs) {
+            if (LateAddrs.empty()) {
+                return;
             }
-        }
-        freeaddrinfo(Res);
+            std::unique_lock Lock(gResolveMutex);
+            gResolveCache[Key] = { LateAddrs, std::chrono::steady_clock::now() };
+            gResolveFailUntil.erase(Key);
+        });
+
+    if (Outcome == BoundedResolve::Result::NoThread) {
+        // no helper thread available: lookup on this thread, like before (the only way DNS works on such hosts)
+        Addrs = AddrsForHost(Host, Port);
     }
 
     std::unique_lock Lock(gResolveMutex);
-    if (!Addrs.empty()) {
+    if (Outcome == BoundedResolve::Result::TimedOut) {
+        gResolveFailUntil[Key] = Now + RESOLVE_FAIL_BACKOFF;
+        beammp_warnf("DNS lookup for {} did not finish within {}s, letting curl resolve it instead", Host, RESOLVE_LOOKUP_LIMIT.count());
+    } else if (!Addrs.empty()) {
         gResolveCache[Key] = { Addrs, Now };
-    } else if (auto It = gResolveCache.find(Key); It != gResolveCache.end()) {
-        Addrs = It->second.Addrs; // lookup failed, reuse the last good answer
+        gResolveFailUntil.erase(Key);
+    } else {
+        gResolveFailUntil[Key] = Now + RESOLVE_FAIL_BACKOFF;
+    }
+    if (Addrs.empty()) {
+        if (auto It = gResolveCache.find(Key); It != gResolveCache.end()) {
+            Addrs = It->second.Addrs; // lookup failed, reuse the last good answer
+        }
     }
     if (Addrs.empty()) {
         return {};
@@ -287,7 +334,7 @@ std::string Http::GET(const std::string& url, unsigned int* status) {
     return Ret;
 }
 
-std::string Http::POST(const std::string& url, const std::string& body, const std::string& ContentType, unsigned int* status, const std::map<std::string, std::string>& headers) {
+std::string Http::POST(const std::string& url, const std::string& body, const std::string& ContentType, unsigned int* status, const std::map<std::string, std::string>& headers, long TimeoutSeconds) {
     std::string Ret;
     CurlLease Lease{};
     CURL* curl = Lease.GetHandle();
@@ -316,8 +363,8 @@ std::string Http::POST(const std::string& url, const std::string& body, const st
 
         // ensure we dont keep connections open for long
         curl_easy_setopt(curl, CURLOPT_MAXCONNECTS, 8L);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, std::min<long>(10L, TimeoutSeconds));
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, TimeoutSeconds);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(curl, CURLOPT_MAXAGE_CONN, 60L);
         curl_easy_setopt(curl, CURLOPT_MAXLIFETIME_CONN, 300L);

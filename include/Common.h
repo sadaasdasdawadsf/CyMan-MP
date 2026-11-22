@@ -55,8 +55,9 @@ struct Version {
 // One multiplayer network (backend) this server is registered on.
 struct BackendNetwork {
     std::string Name; // shown in logs and exposed to Lua as the "network" identifier
-    std::string Url; // backend base url, no trailing slash
+    std::string Url; // backend base url (heartbeat), no trailing slash
     std::string AuthKey; // this server's key for that backend
+    std::string AuthUrl; // where players' keys are checked (/pkToUser). The official network uses a different host than its heartbeat
 };
 
 template <typename T>
@@ -110,14 +111,25 @@ public:
         std::vector<BackendNetwork> Networks;
         const auto CyKey = Settings.getAsString(Settings::Key::General_AuthKey);
         if (!CyKey.empty()) {
-            Networks.push_back({ "CyMan-MP", BackendBase(), CyKey });
+            Networks.push_back({ "CyMan-MP", BackendBase(), CyKey, BackendBase() });
         }
         const auto BMKey = Settings.getAsString(Settings::Key::General_BeamMPAuthKey);
         auto BMUrl = Settings.getAsString(Settings::Key::General_BeamMPBackendUrl);
         while (!BMUrl.empty() && BMUrl.back() == '/')
             BMUrl.pop_back();
         if (!BMKey.empty() && !BMUrl.empty()) {
-            Networks.push_back({ "BeamMP", BMUrl, BMKey });
+            // Official BeamMP: heartbeats go to backend.beammp.com, but player keys are checked by auth.beammp.com
+            // (backend.beammp.com does not answer /pkToUser). A custom BeamMPBackendUrl is used for both.
+            std::string BMAuthUrl = BMUrl;
+            if (BMUrl.find("backend.beammp.com") != std::string::npos) {
+                BMAuthUrl = "https://auth.beammp.com";
+            }
+            if (const char* Env = std::getenv("BEAMMP_OFFICIAL_AUTH_URL"); Env && *Env) {
+                BMAuthUrl = Env;
+                while (!BMAuthUrl.empty() && BMAuthUrl.back() == '/')
+                    BMAuthUrl.pop_back();
+            }
+            Networks.push_back({ "BeamMP", BMUrl, BMKey, BMAuthUrl });
         }
         return Networks;
     }
