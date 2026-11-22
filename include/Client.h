@@ -77,6 +77,12 @@ public:
     // locks
     void DeleteCar(int Ident);
     [[nodiscard]] const std::unordered_map<std::string, std::string>& GetIdentifiers() const { return mIdentifiers; }
+    // True for players who came in through the official BeamMP network. Their client does not know MeshSync
+    // (a CyMan-MP feature), so nothing MeshSync-related may be sent to them.
+    [[nodiscard]] bool IsOfficialBeamMP() const {
+        const auto It = mIdentifiers.find("network");
+        return It != mIdentifiers.end() && It->second == "BeamMP";
+    }
     [[nodiscard]] const ip::udp::endpoint& GetUDPAddr() const { return mUDPAddress; }
     [[nodiscard]] ip::udp::endpoint& GetUDPAddr() { return mUDPAddress; }
     [[nodiscard]] ip::tcp::socket& GetTCPSock() { return mSocket; }

@@ -41,6 +41,12 @@ bool THeartbeatThread::SendHeartbeat(const BackendNetwork& Net, const std::strin
         return false;
     }
     BodyJson["uuid"] = Net.AuthKey;
+    if (Net.Name == "BeamMP") {
+        // MeshSync is a CyMan-MP feature: the official network must not see it advertised
+        BodyJson.erase("meshsync");
+        BodyJson.erase("meshsyncintensity");
+        BodyJson["tags"] = Application::Settings.getAsString(Settings::Key::General_Tags);
+    }
 
     unsigned int ResponseCode = 0;
     std::string T = Http::POST(Net.Url + "/heartbeat", BodyJson.dump(), "application/json", &ResponseCode, { { "api-v", "2" } });
