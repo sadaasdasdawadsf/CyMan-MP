@@ -55,6 +55,10 @@ static constexpr std::string_view StrResourceFolder = "ResourceFolder";
 static constexpr std::string_view EnvStrResourceFolder = "BEAMMP_RESOURCE_FOLDER";
 static constexpr std::string_view StrAuthKey = "AuthKey";
 static constexpr std::string_view EnvStrAuthKey = "BEAMMP_AUTH_KEY";
+static constexpr std::string_view StrBeamMPAuthKey = "BeamMPAuthKey";
+static constexpr std::string_view EnvStrBeamMPAuthKey = "BEAMMP_OFFICIAL_AUTH_KEY";
+static constexpr std::string_view StrBeamMPBackendUrl = "BeamMPBackendUrl";
+static constexpr std::string_view EnvStrBeamMPBackendUrl = "BEAMMP_OFFICIAL_BACKEND_URL";
 static constexpr std::string_view StrLogChat = "LogChat";
 static constexpr std::string_view EnvStrLogChat = "BEAMMP_LOG_CHAT";
 static constexpr std::string_view StrAllowGuests = "AllowGuests";
@@ -136,7 +140,11 @@ void TConfig::FlushToFile() {
     // auto data = toml::parse<toml::preserve_comments>(mConfigFileName);
     auto data = toml::value {};
     data["General"][StrAuthKey.data()] = Application::Settings.getAsString(Settings::Key::General_AuthKey);
-    SetComment(data["General"][StrAuthKey.data()].comments(), " AuthKey has to be filled out in order to run the server");
+    SetComment(data["General"][StrAuthKey.data()].comments(), " AuthKey for the CyMan-MP network (keymaster on https://cymanmp.okeyhi.com). At least one of AuthKey / BeamMPAuthKey has to be filled out in order to run the server");
+    data["General"][StrBeamMPAuthKey.data()] = Application::Settings.getAsString(Settings::Key::General_BeamMPAuthKey);
+    SetComment(data["General"][StrBeamMPAuthKey.data()].comments(), " OPTIONAL. AuthKey for the official BeamMP network (from https://keymaster.beammp.com). Leave empty to only use CyMan-MP");
+    data["General"][StrBeamMPBackendUrl.data()] = Application::Settings.getAsString(Settings::Key::General_BeamMPBackendUrl);
+    SetComment(data["General"][StrBeamMPBackendUrl.data()].comments(), " Backend url of the official BeamMP network. You normally never need to change this");
     data["General"][StrLogChat.data()] = Application::Settings.getAsBool(Settings::Key::General_LogChat);
     SetComment(data["General"][StrLogChat.data()].comments(), " Whether to log chat messages in the console / log");
     data["General"][StrDebug.data()] = Application::Settings.getAsBool(Settings::Key::General_Debug);
@@ -280,6 +288,18 @@ void TConfig::ParseFromFile(std::string_view name) {
         TryReadValue(data, "General", StrTags, EnvStrTags, Settings::Key::General_Tags);
         TryReadValue(data, "General", StrResourceFolder, EnvStrResourceFolder, Settings::Key::General_ResourceFolder);
         TryReadValue(data, "General", StrAuthKey, EnvStrAuthKey, Settings::Key::General_AuthKey);
+        // BeamMP keys are optional, so a config file from before this feature (keys missing) must not warn
+        {
+            const auto HasInFile = [&](const std::string_view& Key) {
+                return data.is_table() && data.contains("General") && data.at("General").is_table() && data.at("General").contains(std::string(Key));
+            };
+            if (HasInFile(StrBeamMPAuthKey) || std::getenv(EnvStrBeamMPAuthKey.data()) != nullptr) {
+                TryReadValue(data, "General", StrBeamMPAuthKey, EnvStrBeamMPAuthKey, Settings::Key::General_BeamMPAuthKey);
+            }
+            if (HasInFile(StrBeamMPBackendUrl) || std::getenv(EnvStrBeamMPBackendUrl.data()) != nullptr) {
+                TryReadValue(data, "General", StrBeamMPBackendUrl, EnvStrBeamMPBackendUrl, Settings::Key::General_BeamMPBackendUrl);
+            }
+        }
         TryReadValue(data, "General", StrLogChat, EnvStrLogChat, Settings::Key::General_LogChat);
         TryReadValue(data, "General", StrAllowGuests, EnvStrAllowGuests, Settings::Key::General_AllowGuests);
         TryReadValue(data, "General", StrMeshSync, EnvStrMeshSync, Settings::Key::General_MeshSync);
@@ -311,7 +331,13 @@ void TConfig::ParseFromFile(std::string_view name) {
         FlushToFile();
     }
     // all good so far, let's check if there's a key
-    if (Application::Settings.getAsString(Settings::Key::General_AuthKey).empty()) {
+    const bool HasCyKey = !Application::Settings.getAsString(Settings::Key::General_AuthKey).empty();
+    const bool HasBMKey = !Application::Settings.getAsString(Settings::Key::General_BeamMPAuthKey).empty();
+    const bool HasBMUrl = !Application::Settings.getAsString(Settings::Key::General_BeamMPBackendUrl).empty();
+    if (HasBMKey && !HasBMUrl) {
+        beammp_warn("BeamMPAuthKey is set but BeamMPBackendUrl is empty, the BeamMP network will NOT be used.");
+    }
+    if (Application::GetNetworks().empty()) {
         if (mDisableConfig) {
             beammp_error("No AuthKey specified in the environment.");
         } else {
@@ -322,8 +348,14 @@ void TConfig::ParseFromFile(std::string_view name) {
         return;
     }
     Application::SetSubsystemStatus("Config", Application::Status::Good);
-    if (Application::Settings.getAsString(Settings::Key::General_AuthKey).size() != 36) {
+    if (HasCyKey && Application::Settings.getAsString(Settings::Key::General_AuthKey).size() != 36) {
         beammp_warn("AuthKey specified is the wrong length and likely isn't valid.");
+    }
+    if (HasBMKey && Application::Settings.getAsString(Settings::Key::General_BeamMPAuthKey).size() != 36) {
+        beammp_warn("BeamMPAuthKey specified is the wrong length and likely isn't valid.");
+    }
+    for (const auto& Net : Application::GetNetworks()) {
+        beammp_info("Network enabled: " + Net.Name + " (" + Net.Url + ")");
     }
 }
 
@@ -349,6 +381,8 @@ void TConfig::PrintDebug() {
     beammp_debug(std::string(StrAllowGuests) + ": \"" + (Application::Settings.getAsBool(Settings::Key::General_AllowGuests) ? "true" : "false") + "\"");
     // special!
     beammp_debug("Key Length: " + std::to_string(Application::Settings.getAsString(Settings::Key::General_AuthKey).length()) + "");
+    beammp_debug("BeamMP Key Length: " + std::to_string(Application::Settings.getAsString(Settings::Key::General_BeamMPAuthKey).length()) + "");
+    beammp_debug(std::string(StrBeamMPBackendUrl) + ": \"" + Application::Settings.getAsString(Settings::Key::General_BeamMPBackendUrl) + "\"");
 }
 
 std::string TConfig::TagsAsPrettyArray() const {

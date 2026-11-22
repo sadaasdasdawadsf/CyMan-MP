@@ -78,6 +78,8 @@ struct Settings {
         General_Name,
         General_Map,
         General_AuthKey,
+        General_BeamMPAuthKey,
+        General_BeamMPBackendUrl,
         General_Private,
         General_IP,
         General_Port,

@@ -32,6 +32,7 @@ public:
     static inline std::string lastCall = "";
 private:
     std::string GenerateCall();
+    bool SendHeartbeat(const BackendNetwork& Net, const std::string& BaseBody, bool& IsAuth);
     std::string GetPlayers();
 
     TResourceManager& mResourceManager;

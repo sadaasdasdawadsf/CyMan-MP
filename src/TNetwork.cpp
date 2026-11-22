@@ -443,58 +443,70 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
         ClientKick(*Client, "Invalid Key (empty)!");
         return nullptr;
     }
-    std::string AuthKey = Application::Settings.getAsString(Settings::Key::General_AuthKey);
     std::string ClientIp = Client->GetIdentifiers().at("ip");
 
-    nlohmann::json AuthReq { };
-    std::string AuthResStr { };
-    try {
-        AuthReq = nlohmann::json {
-            { "key", Key },
-            { "auth_key", AuthKey },
-            { "client_ip", ClientIp }
-        };
+    // The player's key belongs to exactly one network (BeamMP or CyMan-MP). We ask each network we are
+    // registered on whether it knows this key, and the first one that does decides who the player is.
+    const auto Networks = Application::GetNetworks();
+    nlohmann::json AuthRes { };
+    std::string AuthNetwork { };
+    bool AuthOk = false;
 
-        auto Target = "/pkToUser";
+    for (const auto& Net : Networks) {
+        std::string AuthResStr { };
+        try {
+            nlohmann::json AuthReq {
+                { "key", Key },
+                { "auth_key", Net.AuthKey },
+                { "client_ip", ClientIp }
+            };
 
-        unsigned int ResponseCode = 0;
-        AuthResStr = Http::POST(Application::GetBackendUrlForAuth() + Target, AuthReq.dump(), "application/json", &ResponseCode);
-
-    } catch (const std::exception& e) {
-        beammp_debugf("Invalid json sent by client, kicking: {}", e.what());
-        ClientKick(*Client, "Invalid Key (invalid UTF8 string)!");
-        return nullptr;
-    }
-
-    beammp_debug("Response from authentication backend: " + AuthResStr);
-
-    try {
-        nlohmann::json AuthRes = nlohmann::json::parse(AuthResStr);
-
-        if (AuthRes["username"].is_string() && AuthRes["username"].size() > 0 && AuthRes["roles"].is_string()
-            && AuthRes["guest"].is_boolean() && AuthRes["identifiers"].is_array()) {
-
-            Client->SetName(AuthRes["username"]);
-            Client->SetRoles(AuthRes["roles"]);
-            Client->SetIsGuest(AuthRes["guest"]);
-            for (const auto& ID : AuthRes["identifiers"]) {
-                auto Raw = std::string(ID);
-                auto SepIndex = Raw.find(':');
-                Client->SetIdentifier(Raw.substr(0, SepIndex), Raw.substr(SepIndex + 1));
-            }
-        } else {
-            beammp_error("Invalid authentication data received from authentication backend");
-            ClientKick(*Client, "Invalid authentication data!");
+            unsigned int ResponseCode = 0;
+            AuthResStr = Http::POST(Net.Url + "/pkToUser", AuthReq.dump(), "application/json", &ResponseCode);
+        } catch (const std::exception& e) {
+            beammp_debugf("Invalid json sent by client, kicking: {}", e.what());
+            ClientKick(*Client, "Invalid Key (invalid UTF8 string)!");
             return nullptr;
         }
-    } catch (const std::exception& e) {
-        beammp_errorf("Client sent invalid key. Error was: {}", e.what());
-        // TODO: we should really clarify that this was a backend response or parsing error
+
+        beammp_debug("Response from authentication backend [" + Net.Name + "]: " + AuthResStr);
+
+        nlohmann::json Parsed = nlohmann::json::parse(AuthResStr, nullptr, false);
+        if (Parsed.is_discarded() || !Parsed.is_object()) {
+            beammp_debug("[" + Net.Name + "] did not return valid json, trying next network (if any)");
+            continue;
+        }
+        if (Parsed.contains("username") && Parsed["username"].is_string() && !Parsed["username"].get<std::string>().empty()
+            && Parsed.contains("roles") && Parsed["roles"].is_string()
+            && Parsed.contains("guest") && Parsed["guest"].is_boolean()
+            && Parsed.contains("identifiers") && Parsed["identifiers"].is_array()) {
+            AuthRes = std::move(Parsed);
+            AuthNetwork = Net.Name;
+            AuthOk = true;
+            break;
+        }
+        beammp_debug("[" + Net.Name + "] did not accept this key, trying next network (if any)");
+    }
+
+    if (!AuthOk) {
+        beammp_errorf("Client sent a key that none of the {} configured network(s) accepted", Networks.size());
         ClientKick(*Client, "Invalid key! Please restart your game.");
         return nullptr;
     }
 
-    beammp_debug("Name -> " + Client->GetName() + ", Guest -> " + std::to_string(Client->IsGuest()) + ", Roles -> " + Client->GetRoles());
+    Client->SetName(AuthRes["username"].get<std::string>());
+    Client->SetRoles(AuthRes["roles"].get<std::string>());
+    Client->SetIsGuest(AuthRes["guest"].get<bool>());
+    for (const auto& ID : AuthRes["identifiers"]) {
+        auto Raw = std::string(ID);
+        auto SepIndex = Raw.find(':');
+        Client->SetIdentifier(Raw.substr(0, SepIndex), Raw.substr(SepIndex + 1));
+    }
+    // Set last so a backend can't spoof which network the player came from.
+    // Lua plugins see this in the identifiers table (onPlayerAuth / MP.GetPlayerIdentifiers).
+    Client->SetIdentifier("network", AuthNetwork);
+
+    beammp_debug("Network -> " + AuthNetwork + ", Name -> " + Client->GetName() + ", Guest -> " + std::to_string(Client->IsGuest()) + ", Roles -> " + Client->GetRoles());
     mServer.ForEachClient([&](const std::weak_ptr<TClient>& ClientPtr) -> bool {
         std::shared_ptr<TClient> Cl;
         {
@@ -504,7 +516,13 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
             } else
                 return true;
         }
-        if (Cl->GetName() == Client->GetName() && Cl->IsGuest() == Client->IsGuest()) {
+        // the same name on two different networks is two different people
+        const auto NetworkOf = [](const TClient& C) {
+            const auto& Ids = C.GetIdentifiers();
+            const auto It = Ids.find("network");
+            return It == Ids.end() ? std::string() : It->second;
+        };
+        if (Cl->GetName() == Client->GetName() && Cl->IsGuest() == Client->IsGuest() && NetworkOf(*Cl) == NetworkOf(*Client)) {
             DisconnectClient(Cl, "Stale Client (not a real player)");
             return false;
         }
@@ -568,7 +586,7 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
     LuaAPI::MP::Engine->ReportErrors(PostFutures);
 
     if (!NotAllowed && !NotAllowedWithReason) {
-        beammp_info("Identification success");
+        beammp_info("Identification success (" + Client->GetName() + " via " + AuthNetwork + ")");
         mServer.InsertClient(Client);
         TCPClient(Client);
     }

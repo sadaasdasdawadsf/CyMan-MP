@@ -52,6 +52,13 @@ struct Version {
     std::string AsString();
 };
 
+// One multiplayer network (backend) this server is registered on.
+struct BackendNetwork {
+    std::string Name; // shown in logs and exposed to Lua as the "network" identifier
+    std::string Url; // backend base url, no trailing slash
+    std::string AuthKey; // this server's key for that backend
+};
+
 template <typename T>
 using SparseArray = std::unordered_map<size_t, T>;
 
@@ -94,6 +101,25 @@ public:
 
     static std::vector<std::string> GetBackendUrlsInOrder() {
         return { BackendBase() };
+    }
+
+    // All networks this server is registered on. A network is only active when its AuthKey is set.
+    // "CyMan-MP" is the original backend (AuthKey + BEAMMP_BACKEND_URL), "BeamMP" is the official one
+    // (BeamMPAuthKey + BeamMPBackendUrl). Order matters: players' keys are tried in this order.
+    static std::vector<BackendNetwork> GetNetworks() {
+        std::vector<BackendNetwork> Networks;
+        const auto CyKey = Settings.getAsString(Settings::Key::General_AuthKey);
+        if (!CyKey.empty()) {
+            Networks.push_back({ "CyMan-MP", BackendBase(), CyKey });
+        }
+        const auto BMKey = Settings.getAsString(Settings::Key::General_BeamMPAuthKey);
+        auto BMUrl = Settings.getAsString(Settings::Key::General_BeamMPBackendUrl);
+        while (!BMUrl.empty() && BMUrl.back() == '/')
+            BMUrl.pop_back();
+        if (!BMKey.empty() && !BMUrl.empty()) {
+            Networks.push_back({ "BeamMP", BMUrl, BMKey });
+        }
+        return Networks;
     }
 
     static std::string GetServerCheckUrl() { return "https://check.beammp.com"; }
