@@ -20,6 +20,7 @@
 #include <chrono>
 #include <functional>
 #include <random>
+#include <thread>
 #include <utility>
 
 TLuaPlugin::TLuaPlugin(TLuaEngine& Engine, const TLuaPluginConfig& Config, const fs::path& MainFolder)
@@ -62,7 +63,20 @@ TLuaPlugin::TLuaPlugin(TLuaEngine& Engine, const TLuaPluginConfig& Config, const
         }
     }
     for (auto& Result : ResultsToCheck) {
-        Result.second->WaitUntilReady();
+        // A plugin that blocks while loading must not hold up server startup forever.
+        const auto WaitStart = std::chrono::steady_clock::now();
+        bool TimedOut = false;
+        while (!Result.second->IsReady()) {
+            if (std::chrono::steady_clock::now() - WaitStart > std::chrono::seconds(30)) {
+                TimedOut = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (TimedOut) {
+            beammp_lua_warn("\"" + Result.first.string() + "\" did not finish loading within 30 seconds, continuing startup without waiting for it. The plugin may be blocking its Lua state.");
+            continue;
+        }
         auto Snapshot = Result.second->GetSnapshot();
         if (Snapshot.Error) {
             beammp_lua_error("Failed: \"" + Result.first.string() + "\": " + Snapshot.ErrorMessage);

@@ -32,6 +32,7 @@
 #include "TResourceManager.h"
 #include "TServer.h"
 
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <thread>
@@ -218,11 +219,17 @@ int BeamMPServerMain(MainArguments Arguments) {
     };
 
     bool FullyStarted = false;
+    // Safety net: Main only becomes "Good" (and players are only let in) once no subsystem is stuck in "Starting".
+    // If something never finishes, don't lock everybody out forever: say which one it is, then open the server anyway.
+    const auto StartupBegin = std::chrono::steady_clock::now();
+    auto LastStartupWarn = StartupBegin;
+    constexpr auto StartupTimeout = std::chrono::seconds(60);
     while (!Shutdown) {
         if (!FullyStarted) {
             FullyStarted = true;
             bool WithErrors = false;
             std::string SystemsBadList {};
+            std::string SystemsStartingList {};
             auto Statuses = Application::GetSubsystemStatuses();
             for (const auto& NameStatusPair : Statuses) {
                 if (NameStatusPair.first == "Main") {
@@ -234,13 +241,34 @@ int BeamMPServerMain(MainArguments Arguments) {
                 }
                 if (NameStatusPair.second == Application::Status::Starting) {
                     FullyStarted = false;
+                    SystemsStartingList += NameStatusPair.first + ", ";
                 } else if (NameStatusPair.second == Application::Status::Bad) {
                     SystemsBadList += NameStatusPair.first + ", ";
                     WithErrors = true;
                 }
             }
-            // remove ", "
-            SystemsBadList = SystemsBadList.substr(0, SystemsBadList.size() - 2);
+            // remove trailing ", "
+            if (SystemsBadList.size() >= 2) {
+                SystemsBadList.resize(SystemsBadList.size() - 2);
+            }
+            if (SystemsStartingList.size() >= 2) {
+                SystemsStartingList.resize(SystemsStartingList.size() - 2);
+            }
+            if (!FullyStarted) {
+                const auto Now = std::chrono::steady_clock::now();
+                if (Now - StartupBegin > StartupTimeout) {
+                    beammp_error("Startup is taking too long, these systems never finished starting: " + SystemsStartingList + ". Letting players join anyway.");
+                    FullyStarted = true;
+                    WithErrors = true;
+                    if (!SystemsBadList.empty()) {
+                        SystemsBadList += ", ";
+                    }
+                    SystemsBadList += SystemsStartingList;
+                } else if (Now - LastStartupWarn > std::chrono::seconds(10)) {
+                    LastStartupWarn = Now;
+                    beammp_warn("Still waiting for these systems to start: " + SystemsStartingList);
+                }
+            }
             if (FullyStarted) {
                 Application::SetSubsystemStatus("Main", Application::Status::Good);
 

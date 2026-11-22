@@ -348,7 +348,8 @@ void TConfig::ParseFromFile(std::string_view name) {
         return;
     }
     Application::SetSubsystemStatus("Config", Application::Status::Good);
-    if (HasCyKey && Application::Settings.getAsString(Settings::Key::General_AuthKey).size() != 36) {
+    // CyMan-MP keys look like xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx (35 chars), BeamMP keys are 36 chars
+    if (HasCyKey && Application::Settings.getAsString(Settings::Key::General_AuthKey).size() != 35 && Application::Settings.getAsString(Settings::Key::General_AuthKey).size() != 36) {
         beammp_warn("AuthKey specified is the wrong length and likely isn't valid.");
     }
     if (HasBMKey && Application::Settings.getAsString(Settings::Key::General_BeamMPAuthKey).size() != 36) {

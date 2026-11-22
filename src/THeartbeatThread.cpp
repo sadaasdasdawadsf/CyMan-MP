@@ -138,10 +138,20 @@ void THeartbeatThread::operator()() {
             bool& IsAuth = AuthState[Net.Name];
             SendHeartbeat(Net, Body, IsAuth);
             AnyAuth = AnyAuth || IsAuth;
+            // As soon as one network accepted us the server is ready. A slow or unreachable second
+            // network must not hold up startup (each request can take up to 40s to time out).
+            if (IsAuth) {
+                Application::SetSubsystemStatus("Heartbeat", Application::Status::Good);
+            }
         }
 
         if (AnyAuth || Application::Settings.getAsBool(Settings::Key::General_Private)) {
             Application::SetSubsystemStatus("Heartbeat", Application::Status::Good);
+        } else {
+            // No network accepted us (bad key, backend down, ...). Report that as an error instead of staying in
+            // "Starting" forever, which would keep kicking every player with "server is still starting".
+            // Direct connect keeps working, and we retry on the next heartbeat.
+            Application::SetSubsystemStatus("Heartbeat", Application::Status::Bad);
         }
         if (!Application::Settings.getAsBool(Settings::Key::Misc_ImScaredOfUpdates) && UpdateReminderTimePassed.count() > UpdateReminderTimeout.count()) {
             LastUpdateReminderTime = std::chrono::high_resolution_clock::now();

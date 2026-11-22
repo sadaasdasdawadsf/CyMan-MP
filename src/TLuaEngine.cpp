@@ -67,9 +67,16 @@ void TLuaEngine::operator()() {
     RegisterThread("LuaEngine");
     // lua engine main thread
     beammp_infof("Lua v{}.{}.{}", LUA_VERSION_MAJOR, LUA_VERSION_MINOR, LUA_VERSION_RELEASE);
-    CollectAndInitPlugins();
+    bool PluginsOk = true;
+    try {
+        CollectAndInitPlugins();
+    } catch (const std::exception& e) {
+        // never leave the subsystem in "Starting" because a plugin failed to load
+        PluginsOk = false;
+        beammp_error(std::string("Failed to initialize plugins: ") + e.what());
+    }
 
-    Application::SetSubsystemStatus("LuaEngine", Application::Status::Good);
+    Application::SetSubsystemStatus("LuaEngine", PluginsOk ? Application::Status::Good : Application::Status::Bad);
     // now call all onInit's
     auto Futures = TriggerEvent("onInit", "");
     WaitForAll(Futures, std::chrono::seconds(5));

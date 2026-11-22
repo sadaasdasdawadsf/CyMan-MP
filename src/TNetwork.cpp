@@ -240,6 +240,8 @@ void TNetwork::TCPServerMain() {
     auto address = boost::asio::ip::make_address(Application::Settings.getAsString(Settings::Key::General_IP), ec);
     if (ec) {
         beammp_errorf("Failed to parse IP: {}", ec.message());
+        Application::SetSubsystemStatus("TCPNetwork", Application::Status::Bad);
+        Application::GracefullyShutdown();
         return;
     }
 
@@ -250,6 +252,8 @@ void TNetwork::TCPServerMain() {
     Listener.open(ListenEp.protocol(), ec);
     if (ec) {
         beammp_errorf("Failed to open socket: {}", ec.message());
+        Application::SetSubsystemStatus("TCPNetwork", Application::Status::Bad);
+        Application::GracefullyShutdown();
         return;
     }
     // set IP_V6ONLY to false to allow both v4 and v6

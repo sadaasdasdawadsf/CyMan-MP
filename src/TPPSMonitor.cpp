@@ -37,9 +37,8 @@ TPPSMonitor::TPPSMonitor(TServer& Server)
 }
 void TPPSMonitor::operator()() {
     RegisterThread("PPSMonitor");
-    while (!mNetwork) {
-        // hard(-ish) spin
-        std::this_thread::yield();
+    while (!mNetwork && !Application::IsShuttingDown()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     beammp_debug("PPSMonitor starting");
     Application::SetSubsystemStatus("PPSMonitor", Application::Status::Good);
