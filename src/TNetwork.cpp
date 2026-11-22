@@ -535,7 +535,9 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
     });
 
     auto Futures = LuaAPI::MP::Engine->TriggerEvent("onPlayerAuth", "", Client->GetName(), Client->GetRoles(), Client->IsGuest(), Client->GetIdentifiers());
-    TLuaEngine::WaitForAll(Futures);
+    // Bounded: a plugin whose Lua state is blocked must not leave every joining player on "Connecting" forever.
+    // WaitForAll logs which handler/plugin did not answer in time.
+    TLuaEngine::WaitForAll(Futures, std::chrono::seconds(10));
     bool NotAllowed = false;
     bool BypassLimit = false;
 
@@ -1034,7 +1036,7 @@ void TNetwork::OnDisconnect(const std::weak_ptr<TClient>& ClientPtr) {
     SendToAll(&c, StringToVector(Packet), false, true);
     Packet.clear();
     auto Futures = LuaAPI::MP::Engine->TriggerEvent("onPlayerDisconnect", "", c.GetID());
-    LuaAPI::MP::Engine->WaitForAll(Futures);
+    LuaAPI::MP::Engine->WaitForAll(Futures, std::chrono::seconds(10));
     DisconnectClient(c, "Already Disconnected (OnDisconnect)");
     mServer.RemoveClient(ClientPtr);
 }
